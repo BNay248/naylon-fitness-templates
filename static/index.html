@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Templates · Naylon Fitness Portal</title>
+<link rel="icon" href="/static/NFP.jpg">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0e1117">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container"></div>
+<div id="toasts"></div>
+<div id="sync-status" class="status-banner"></div>
+<script src="/static/common.js"></script>
+<script src="/static/workout-ui.js"></script>
+<script src="/static/offline.js"></script>
+<script src="/static/library-ui.js"></script>
+<script src="/static/template-run.js"></script>
+<script src="/static/template-builder.js"></script>
+<script>
+  let main = null;
+  let templates = null;    // templates this user can run (with remembered picks); null until loaded
+  let catalog = makeCatalog([]);
+  let history = {};        // exercise_id -> {last_logged_at, target_streak, previous}: drives suggestions
+  let clients = [];        // a coach's clients, to assign templates to
+  const templateRuns = {}; // template id -> run state (picks, step) that outlives re-renders
+  let offline = false;
+  let renderDeferred = false;
+
+  // ---- Workouts go through the offline queue, then sync ----
+
+  function queueChange(op, message) {
+    SyncQueue.push(op);
+    toast(message);
+    render();
+    sync();
+  }
+
+  const actions = {
+    log: (template, supersets, picks) => queueChange({ kind: 'template_log', template_id: template.id, body: {
+      supersets, picks, logged_at: new Date().toISOString(), session_name: template.name,
+    } }, 'Workout saved'),
+    saveAsSession: (template, body) => queueChange({ kind: 'template_save', template_id: template.id, body },
+      ME.trainer_url ? 'Saved to your sessions in the trainer' : 'Saved to your sessions'),
+  };
+
+  // ---- Loading ----
+
+  function loadCached() {
+    templates = store.get('templates', null);
+    history = store.get('history', {});
+    clients = store.get('clients', []);
+    catalog = makeCatalog(store.get('exercises', []), store.get('library', null));
+  }
+
+  async function refresh() {
+    try {
+      const [runnable, exercises, library, recent, mine] = await Promise.all([api('GET', '/api/templates'), api('GET', '/api/exercises'),
+        api('GET', '/api/library'), api('GET', '/api/exercise-history'), api('GET', '/api/clients')]);
+      Object.entries({ templates: runnable, exercises, library, history: recent, clients: mine }).forEach(([name, value]) => store.set(name, value));
+      loadCached();
+      offline = false;
+    } catch (err) {
+      if (err.status !== 0) throw err;
+      offline = true;
+    }
+  }
+
+  const snapshot = () => JSON.stringify([templates, SyncQueue.load(), catalog.list.length, history, clients]);
+
+  async function sync() {
+    const before = snapshot();
+    try {
+      await flushQueue(message => toast(message, 'error'), records => records.forEach(record => toast(recordText(record), 'pr')));
+      await refresh();
+    } catch (err) {
+      if (err.status !== 401) toast(err.message, 'error');
+    }
+    updateSyncBanner(offline);
+    if (snapshot() === before && templates) return;
+    // Don't rebuild the page under someone who is building or editing a template.
+    if (main.querySelector('details[open] .builder')) renderDeferred = true;
+    else render();
+  }
+
+  // After a change made online (create/edit/delete/assign): reload and redraw.
+  async function reload() {
+    await refresh();
+    render();
+  }
+
+  // ---- Owner tools on a template card ----
+
+  function ownerTools(template) {
+    const assigning = new Set(template.assignees);
+    const tags = [
+      template.published && el('span', { class: 'tag' }, 'Published'),
+      template.assignees.length > 0 && el('span', { class: 'tag' }, `${template.assignees.length} assigned`),
+    ];
+    const tools = setMode => el('div', { class: 'buttons' },
+      el('button', { class: 'small', onclick: () => setMode('edit') }, 'Edit'),
+      ME.role === 'coach' && el('button', { class: 'small', onclick: () => setMode('assign') }, 'Assign to Clients'),
+      el('button', { class: 'small danger', onclick: () => setMode('delete') }, 'Delete'));
+    const views = {
+      edit: setMode => templateBuilder({ catalog, initial: template, saveLabel: 'Save Template',
+        onSave: async state => {
+          await api('PUT', `/api/templates/${template.id}`, state);
+          toast('Template saved. Sessions saved from it are not affected.');
+          delete templateRuns[template.id]; // the slots may have changed: start the next run from fresh picks
+          await reload();
+        },
+        onCancel: () => setMode('fill') }),
+      assign: setMode => el('div', { class: 'confirm' },
+        el('div', {}, 'Assign this template to:'),
+        clients.length ? clients.map(client => el('label', { class: 'check' },
+          el('input', { type: 'checkbox', checked: assigning.has(client.username), onchange: e => {
+            e.target.checked ? assigning.add(client.username) : assigning.delete(client.username);
+          } }), `${client.name} (${client.username})`)) : el('p', { class: 'muted' }, 'No clients yet.'),
+        el('div', { class: 'buttons' },
+          el('button', { class: 'primary', onclick: e => withBusy(e.currentTarget, async () => {
+            await api('POST', `/api/templates/${template.id}/assign`, { usernames: [...assigning] });
+            toast('Assignments saved');
+            templateRuns[template.id].mode = 'fill';
+            await reload();
+          }) }, 'Save'),
+          el('button', { onclick: () => setMode('fill') }, 'Cancel'))),
+      delete: setMode => el('div', { class: 'confirm' },
+        `Delete "${template.name}"? Workouts already logged and sessions saved from it are kept.`,
+        el('div', { class: 'buttons' },
+          el('button', { class: 'danger', onclick: e => withBusy(e.currentTarget, async () => {
+            await api('DELETE', `/api/templates/${template.id}`);
+            toast('Template deleted');
+            delete templateRuns[template.id];
+            await reload();
+          }) }, 'Yes, delete'),
+          el('button', { onclick: () => setMode('fill') }, 'Cancel'))),
+    };
+    return { tags, tools, views };
+  }
+
+  // ---- Rendering ----
+
+  function render() {
+    renderDeferred = false;
+    updateSyncBanner(offline);
+    if (!templates) {
+      return mount(main, el('h1', {}, 'Templates'),
+        el('div', { class: 'info' }, offline ? "You're offline and this device has no saved templates yet." : 'Loading…'));
+    }
+    const ctx = { catalog, history: withQueuedLogs(history, SyncQueue.load()), equipment: new Set(ME.equipment_ids || []),
+      equipmentNames: Object.fromEntries(catalog.library.equipment.map(item => [item.id, item.name])), taken: new Set() };
+    const card = (template, extra = {}) => templateRunCard(template, {
+      ctx, actions, drafts, openKeys, state: templateRuns[template.id] = templateRuns[template.id] || {}, ...extra,
+    });
+    const mine = templates.filter(template => template.can_edit);
+    const shared = templates.filter(template => !template.can_edit);
+
+    mount(main,
+      el('h1', {}, 'Templates'),
+      el('div', { class: 'info' }, 'A template is a recipe of slots. Each time you run it, fill every slot from suggestions that fit your equipment and history, then train it like a session.'),
+      trackedDetails('create', openKeys, { class: 'card' },
+        el('summary', {}, 'Create Template'),
+        offline ? el('p', { class: 'muted' }, 'Connect to the internet to create templates.')
+          : templateBuilder({ catalog, saveLabel: 'Create Template', onSave: async state => {
+            await api('POST', '/api/templates', state);
+            toast('Template created');
+            openKeys.delete('create');
+            await reload();
+          } })),
+      el('h2', {}, 'Your Templates'),
+      mine.length ? mine.map(template => card(template, ownerTools(template)))
+        : el('p', { class: 'muted' }, 'No templates yet. Create your first one above.'),
+      shared.length > 0 && [
+        el('h2', {}, 'From Your Coaches'),
+        shared.map(template => card(template, { tags: [el('span', { class: 'tag' }, template.owner_name)] })),
+      ],
+    );
+  }
+
+  boot(async container => {
+    main = container;
+    // Show cached data (plus anything queued) instantly, then catch up with the server.
+    loadCached();
+    render();
+    await sync();
+
+    window.addEventListener('online', sync);
+    window.addEventListener('offline', () => { offline = true; updateSyncBanner(offline); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync(); });
+    setInterval(() => {
+      if (renderDeferred && !main.querySelector('details[open] .builder')) render();
+      if (SyncQueue.load().length) sync();
+    }, 20000);
+  });
+</script>
+</body>
+</html>

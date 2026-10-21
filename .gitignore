@@ -1,0 +1,35 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Environment variables
+.env
+
+# Streamlit
+.streamlit/
+
+# Database files (if using local storage)
+*.db
+*.json
+!static/manifest.json
+.jwt_secret
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+config.yaml
