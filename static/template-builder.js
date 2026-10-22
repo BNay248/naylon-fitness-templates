@@ -18,7 +18,8 @@ function ruleSections(catalog) {
     muscle_group_ids: ['Muscle groups', [{ label: 'Groups', items: lib.muscle_groups }]],
     muscle_ids: ['Muscles', lib.muscle_groups.map(group => ({ label: group.name, items: lib.muscles.filter(muscle => muscle.group_id === group.id) }))],
     movement_pattern_ids: ['Movement patterns', bySection(lib.movement_patterns, 'kind', lib.pattern_kinds)],
-    equipment_ids: ['Equipment (uses only these)', bySection(lib.equipment, 'type', lib.equipment_types)],
+    equipment_ids: ['Equipment (uses only these)', [{ label: 'None', items: [{ id: NO_EQUIPMENT, name: 'No equipment', description: 'Bodyweight exercises that need nothing at all' }] },
+      ...bySection(lib.equipment, 'type', lib.equipment_types)]],
     pattern_kinds: ['Exercise kinds', [{ label: 'Kinds', items: lib.pattern_kinds.map(kind => ({ id: kind, name: kind })) }]],
   };
 }

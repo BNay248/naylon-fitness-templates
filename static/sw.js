@@ -1,5 +1,5 @@
 // Bump CACHE_NAME whenever static files change.
-const CACHE_NAME = 'templates-shell-v1';
+const CACHE_NAME = 'templates-shell-v2';
 const CORE_ASSETS = [
   '/',
   '/static/style.css',

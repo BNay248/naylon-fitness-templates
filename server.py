@@ -416,6 +416,7 @@ REOPEN_MODES = ["remember", "fresh"]
 # Slot rule key -> library collection its ids come from (pattern_kinds hold PATTERN_KINDS names instead).
 RULE_COLLECTIONS = {"muscle_group_ids": "muscle_groups", "muscle_ids": "muscles",
                     "movement_pattern_ids": "movement_patterns", "equipment_ids": "equipment"}
+NO_EQUIPMENT = "none"  # an equipment rule value: exercises that need no equipment
 MAX_SHORTLIST = 30
 
 
@@ -433,14 +434,19 @@ class TemplateAssignRequest(BaseModel):
 
 def matches_rules(rules: Dict, exercise: Dict, kind_of: Dict[str, str]) -> bool:
     """AND across rule keys, OR within one; an empty key doesn't constrain. An equipment rule means "uses some of
-    these and nothing else" (so a barbell slot doesn't match bodyweight stretches). Mirrored by matchesRules in library-ui.js."""
+    these and nothing else" (so a barbell slot doesn't match bodyweight stretches); NO_EQUIPMENT in it also lets
+    through exercises that need no equipment. Mirrored by matchesRules in library-ui.js."""
     def any_of(key: str, values) -> bool:
         return not rules.get(key) or bool(set(rules[key]) & set(values or []))
+
+    def equipment_fits() -> bool:
+        allowed, needed = set(rules.get("equipment_ids") or []), set(exercise.get("equipment_ids") or [])
+        return not allowed or (needed <= allowed if needed else NO_EQUIPMENT in allowed)
     return (any_of("muscle_group_ids", exercise.get("primary_group_ids"))
             and any_of("muscle_ids", exercise.get("primary_muscle_ids"))
             and any_of("movement_pattern_ids", exercise.get("movement_pattern_ids"))
             and any_of("pattern_kinds", [kind_of.get(i) for i in exercise.get("movement_pattern_ids") or []])
-            and (not rules.get("equipment_ids") or bool(exercise.get("equipment_ids")) and set(exercise["equipment_ids"]) <= set(rules["equipment_ids"])))
+            and equipment_fits())
 
 
 def clean_slot(raw: Dict, visible: Dict[str, Dict], known: Dict[str, set]) -> Dict:
@@ -451,6 +457,8 @@ def clean_slot(raw: Dict, visible: Dict[str, Dict], known: Dict[str, set]) -> Di
         raise HTTPException(status_code=400, detail=f"{name}: choose locked, shortlist or open")
     raw_rules = raw.get("rules") if isinstance(raw.get("rules"), dict) else {}
     rules = {key: unique(str(i) for i in raw_rules.get(key) or [] if str(i) in known[key]) for key in RULE_COLLECTIONS}
+    if NO_EQUIPMENT in (raw_rules.get("equipment_ids") or []):
+        rules["equipment_ids"].append(NO_EQUIPMENT)
     rules["pattern_kinds"] = unique(kind for kind in raw_rules.get("pattern_kinds") or [] if kind in PATTERN_KINDS)
     slot = {"label": label, "mode": mode, "exercise_id": None, "shortlist_ids": [], "rules": rules,
             "note": clean_note(raw.get("note")), "targets": clean_targets(raw.get("targets"), POSSIBLE_METRICS)}

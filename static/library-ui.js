@@ -34,8 +34,12 @@ function chipPicker(title, sections, selectedIds, onChange = () => {}) {
 // Sections of library items by their type/kind, in the configured order.
 const bySection = (items, key, order) => order.map(label => ({ label, items: items.filter(item => item[key] === label) }));
 
+// An equipment rule value meaning "needs no equipment" (the server's NO_EQUIPMENT).
+const NO_EQUIPMENT = 'none';
+
 // Client-side mirror of the server's matches_rules: AND across rule keys, OR within one; an empty key doesn't
-// constrain; an equipment rule means "uses some of these and nothing else". Needs exercise.pattern_kinds (from /api/exercises).
+// constrain; an equipment rule means "uses some of these and nothing else", and NO_EQUIPMENT in it also lets
+// through exercises that need no equipment. Needs exercise.pattern_kinds (from /api/exercises).
 function matchesRules(rules, exercise) {
   const anyOf = (key, values) => !(rules[key] || []).length || (values || []).some(value => rules[key].includes(value));
   const equipment = rules.equipment_ids || [];
@@ -43,5 +47,6 @@ function matchesRules(rules, exercise) {
     && anyOf('muscle_ids', exercise.primary_muscle_ids)
     && anyOf('movement_pattern_ids', exercise.movement_pattern_ids)
     && anyOf('pattern_kinds', exercise.pattern_kinds)
-    && (!equipment.length || ((exercise.equipment_ids || []).length > 0 && exercise.equipment_ids.every(id => equipment.includes(id))));
+    && (!equipment.length || ((exercise.equipment_ids || []).length
+      ? exercise.equipment_ids.every(id => equipment.includes(id)) : equipment.includes(NO_EQUIPMENT)));
 }
