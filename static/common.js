@@ -174,6 +174,7 @@ function showLogin() {
     el('img', { class: 'logo', src: '/static/NFP.jpg', alt: '' }),
     title, error, name, email, username, password, confirm, submit,
     el('div', { class: 'toggle' }, toggleLink),
+    el('p', { class: 'muted', style: 'margin-top:10px;text-align:center' }, 'Forgot your password? Ask the administrator for a reset link.'),
   );
   submit.type = 'submit';
   toggleLink.type = 'button';
